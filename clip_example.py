@@ -1,3 +1,5 @@
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
 import timm
 import tome
 from transformers.models.clip.modeling_clip import CLIPEncoderLayer, CLIPAttention
@@ -156,7 +158,16 @@ if __name__ == '__main__':
         outputs = model(**inputs)
         if i > 10:
            ori.append(time.time() - t) 
-    print('Original:', np.mean(ori))
+    print('cpu:', np.mean(ori))
+
+    model.cuda()
+    ori = []
+    for i in range(100):
+        t = time.time()
+        outputs = model(**inputs)
+        if i > 10:
+           ori.append(time.time() - t) 
+    print('cuda:', np.mean(ori))
 
     model = AutoModel.from_pretrained('openai/clip-vit-base-patch32')
     model.r = 4
