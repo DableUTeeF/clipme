@@ -128,7 +128,6 @@ def apply_patch(
     ToMeVisionTransformer = make_tome_class(model.__class__)
 
     model.__class__ = ToMeVisionTransformer
-    model.r = 16
     model._tome_info = {
         "r": model.r,
         "size": None,

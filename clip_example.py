@@ -6,6 +6,9 @@ from transformers import AutoModel, CLIPProcessor
 from PIL import Image
 from tome.merge import bipartite_soft_matching, merge_source, merge_wavg
 import torch
+import time
+import numpy as np
+
 
 class ToMeCLIPAttention(CLIPAttention):
     def forward(
@@ -20,6 +23,8 @@ class ToMeCLIPAttention(CLIPAttention):
         query_states = self.q_proj(hidden_states) * self.scale
         key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
         value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+        k_mean = key_states.mean(1)
 
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
@@ -81,7 +86,7 @@ class ToMeCLIPAttention(CLIPAttention):
 
         attn_output = self.out_proj(attn_output)
 
-        return attn_output, attn_weights_reshaped, key_states.mean(0).unsqueeze(0)
+        return attn_output, attn_weights_reshaped, k_mean
 
 
 class ToMeCLIPEncoderLayer(CLIPEncoderLayer):
@@ -111,7 +116,7 @@ class ToMeCLIPEncoderLayer(CLIPEncoderLayer):
 
         residual = hidden_states
 
-        r = 16
+        r = self._tome_info['r']
         if r > 0:
             # Apply ToMe here
             merge, _ = bipartite_soft_matching(
@@ -120,7 +125,7 @@ class ToMeCLIPEncoderLayer(CLIPEncoderLayer):
                 self._tome_info["class_token"],
                 self._tome_info["distill_token"],
             )
-            hidden_states, self._tome_info["size"] = merge_wavg(merge, hidden_states, self._tome_info["size"])
+            hidden_states, _ = merge_wavg(merge, hidden_states, self._tome_info["size"])
         residual = hidden_states
         hidden_states = self.layer_norm2(hidden_states)
         hidden_states = self.mlp(hidden_states)
@@ -140,9 +145,21 @@ if __name__ == '__main__':
     # tome.patch.timm(model)
     # # Set the number of tokens reduced per layer. See paper for details.
     # model.r = 16
+    model = AutoModel.from_pretrained('openai/clip-vit-base-patch32')
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    image = Image.open('/home/palm/PycharmProjects/clipme/imgs/Turkish_Angora_in_Ankara_Zoo_(AOÇ).JPG')
+    inputs = processor(text=["a photo of a cat", "a photo of a dog"], images=image, return_tensors="pt", padding=True)
+
+    ori = []
+    for i in range(100):
+        t = time.time()
+        outputs = model(**inputs)
+        if i > 10:
+           ori.append(time.time() - t) 
+    print('Original:', np.mean(ori))
 
     model = AutoModel.from_pretrained('openai/clip-vit-base-patch32')
-    model.r = 0
+    model.r = 4
     model._tome_info = {
         "r": model.r,
         "size": None,
@@ -152,17 +169,25 @@ if __name__ == '__main__':
         "class_token": False,
         "distill_token": False,
     }
-    for module in model.modules():
+
+    for module in model.vision_model.modules():
         if isinstance(module, CLIPEncoderLayer):
             module.__class__ = ToMeCLIPEncoderLayer
             module._tome_info = model._tome_info
         elif isinstance(module, CLIPAttention):
             module.__class__ = ToMeCLIPAttention
+            module._tome_info = model._tome_info
 
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    image = Image.open('/home/palm/PycharmProjects/clipme/imgs/Turkish_Angora_in_Ankara_Zoo_(AOÇ).JPG')
-
-    inputs = processor(text=["a photo of a cat", "a photo of a dog"], images=image, return_tensors="pt", padding=True)
+    merged = []
+    for i in range(100):
+        t = time.time()
+        outputs = model(**inputs)
+        if i > 10:
+           merged.append(time.time() - t) 
+        # print('merged:', time.time() - t)
+    print('merged:', np.mean(merged))
 
     outputs = model(**inputs)
-    print(outputs)
+    logits_per_image = outputs.logits_per_image
+    probs = logits_per_image.softmax(dim=1)
+    print(probs)
